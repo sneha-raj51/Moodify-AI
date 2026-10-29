@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-mood-offwhite: #F7F7F0;
+  --color-mood-forest: #174D3A;
+  --color-mood-lime: #B7D957;
+  --color-mood-cobalt: #3158C9;
+  --color-mood-mustard: #E8BD45;
+  --color-mood-black: #20251F;
+}
+
+@layer base {
+  body {
+    @apply bg-mood-offwhite text-mood-black antialiased;
+  }
+
+  /* Accessibility: Respect user reduced-motion preferences */
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

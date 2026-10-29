@@ -1,0 +1,28 @@
+{
+    "architecture": "ResNet18",
+    "weights_initialization": "ImageNet1K_V1",
+    "input_size": [
+        224,
+        224
+    ],
+    "emotions": [
+        "angry",
+        "disgust",
+        "fear",
+        "happy",
+        "sad",
+        "surprise",
+        "neutral"
+    ],
+    "training_samples": 24406,
+    "validation_samples": 4303,
+    "test_samples": 7178,
+    "baseline_test_accuracy": 51.74143215380329,
+    "baseline_macro_f1": 42.87118804022067,
+    "improved_test_accuracy": 65.12956255224297,
+    "improved_macro_f1": 61.827681764531825,
+    "improved_weighted_f1": 64.9442291362468,
+    "best_epoch": 4,
+    "epochs_trained": 4,
+    "updated_at": "2026-10-18T21:45:00Z"
+}

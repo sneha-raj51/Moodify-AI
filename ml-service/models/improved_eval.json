@@ -1,0 +1,162 @@
+{
+    "model_path": "models/resnet18_transfer_v1.pth",
+    "test_dir": "D:\\Downloads\\archive\\test",
+    "num_samples": 7178,
+    "overall_accuracy": 0.6512956255224297,
+    "macro_f1": 0.6182768176453183,
+    "weighted_f1": 0.649442291362468,
+    "duration_seconds": 182.52355074882507,
+    "class_metrics": {
+        "angry": {
+            "index": 0,
+            "support": 958,
+            "true_positives": 554,
+            "false_positives": 409,
+            "false_negatives": 404,
+            "accuracy": 0.5782881002087683,
+            "precision": 0.5752855659397715,
+            "recall": 0.5782881002087683,
+            "f1_score": 0.5767829255596044
+        },
+        "disgust": {
+            "index": 1,
+            "support": 111,
+            "true_positives": 72,
+            "false_positives": 91,
+            "false_negatives": 39,
+            "accuracy": 0.6486486486486487,
+            "precision": 0.44171779141104295,
+            "recall": 0.6486486486486487,
+            "f1_score": 0.5255474452554744
+        },
+        "fear": {
+            "index": 2,
+            "support": 1024,
+            "true_positives": 424,
+            "false_positives": 410,
+            "false_negatives": 600,
+            "accuracy": 0.4140625,
+            "precision": 0.5083932853717026,
+            "recall": 0.4140625,
+            "f1_score": 0.4564047362755651
+        },
+        "happy": {
+            "index": 3,
+            "support": 1774,
+            "true_positives": 1537,
+            "false_positives": 238,
+            "false_negatives": 237,
+            "accuracy": 0.8664036076662909,
+            "precision": 0.8659154929577465,
+            "recall": 0.8664036076662909,
+            "f1_score": 0.8661594815440968
+        },
+        "sad": {
+            "index": 4,
+            "support": 1247,
+            "true_positives": 677,
+            "false_positives": 644,
+            "false_negatives": 570,
+            "accuracy": 0.5429029671210907,
+            "precision": 0.5124905374716124,
+            "recall": 0.5429029671210907,
+            "f1_score": 0.5272585669781932
+        },
+        "surprise": {
+            "index": 5,
+            "support": 831,
+            "true_positives": 654,
+            "false_positives": 228,
+            "false_negatives": 177,
+            "accuracy": 0.7870036101083032,
+            "precision": 0.7414965986394558,
+            "recall": 0.7870036101083032,
+            "f1_score": 0.7635726795096323
+        },
+        "neutral": {
+            "index": 6,
+            "support": 1233,
+            "true_positives": 757,
+            "false_positives": 483,
+            "false_negatives": 476,
+            "accuracy": 0.6139497161394971,
+            "precision": 0.6104838709677419,
+            "recall": 0.6139497161394971,
+            "f1_score": 0.6122118883946623
+        }
+    },
+    "confusion_matrix": [
+        [
+            554,
+            41,
+            87,
+            33,
+            140,
+            27,
+            76
+        ],
+        [
+            22,
+            72,
+            5,
+            3,
+            8,
+            1,
+            0
+        ],
+        [
+            118,
+            16,
+            424,
+            29,
+            234,
+            104,
+            99
+        ],
+        [
+            46,
+            5,
+            37,
+            1537,
+            35,
+            32,
+            82
+        ],
+        [
+            132,
+            20,
+            131,
+            54,
+            677,
+            26,
+            207
+        ],
+        [
+            21,
+            2,
+            79,
+            40,
+            16,
+            654,
+            19
+        ],
+        [
+            70,
+            7,
+            71,
+            79,
+            211,
+            38,
+            757
+        ]
+    ],
+    "emotions": [
+        "angry",
+        "disgust",
+        "fear",
+        "happy",
+        "sad",
+        "surprise",
+        "neutral"
+    ]
+}
