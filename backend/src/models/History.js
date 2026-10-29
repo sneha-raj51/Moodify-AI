@@ -23,7 +23,8 @@ const historySchema = new mongoose.Schema({
   isPlayable: { type: Boolean, default: false },
   listenedDuration: { type: Number, default: 0 },
   isMeaningful: { type: Boolean, default: false },
-  completed: { type: Boolean, default: false }
+  completed: { type: Boolean, default: false },
+  skipped: { type: Boolean, default: false }
 }, {
   timestamps: true
 });

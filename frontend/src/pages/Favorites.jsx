@@ -26,6 +26,14 @@ const Favorites = ({
     const list = [];
     const seenIds = new Set();
 
+    const registerKey = (id) => {
+      if (!id) return;
+      const s = String(id).trim();
+      seenIds.add(s);
+      if (s.startsWith('itunes_')) seenIds.add(s.slice(7));
+      if (/^\d+$/.test(s)) seenIds.add(`itunes_${s}`);
+    };
+
     // 1. Process all dbFavorites entries (which hold full song objects for catalog, iTunes, and AI songs)
     if (Array.isArray(dbFavorites) && dbFavorites.length > 0) {
       for (const fav of dbFavorites) {
@@ -36,14 +44,22 @@ const Favorites = ({
         if (typeof songData === 'object') {
           songObj = { ...songData };
         } else {
-          const matched = songs.find(s => String(s._id || s.id) === String(songData));
+          const matched = songs.find(s => {
+            const sid = String(s._id || s.id || '');
+            const target = String(songData);
+            return sid === target || 
+              (target.startsWith('itunes_') && sid === target.slice(7)) || 
+              (sid.startsWith('itunes_') && sid.slice(7) === target);
+          });
           songObj = matched ? { ...matched } : { _id: songData, id: songData, title: 'Saved Track', artist: 'Unknown Artist' };
         }
 
         const primaryId = songObj._id || songObj.id || fav.rawSongId || fav.songId;
         const key = String(primaryId);
         if (key && !seenIds.has(key)) {
-          seenIds.add(key);
+          registerKey(primaryId);
+          if (fav.rawSongId) registerKey(fav.rawSongId);
+          if (typeof fav.songId === 'string') registerKey(fav.songId);
           list.push({
             ...songObj,
             favoriteRecordId: fav._id
@@ -55,8 +71,13 @@ const Favorites = ({
     // 2. Also check any catalog songs that match the favorites Set (handles optimistic/instant state)
     for (const s of songs) {
       const sId = s._id || s.id || s.songId;
-      if (sId && (favorites.has(sId) || favorites.has(String(sId))) && !seenIds.has(String(sId))) {
-        seenIds.add(String(sId));
+      if (!sId) continue;
+      const strId = String(sId);
+      const isFav = favorites.has(sId) || favorites.has(strId) || 
+        (strId.startsWith('itunes_') && favorites.has(strId.slice(7))) || 
+        (/^\d+$/.test(strId) && favorites.has(`itunes_${strId}`));
+      if (isFav && !seenIds.has(strId)) {
+        registerKey(strId);
         list.push(s);
       }
     }

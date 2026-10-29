@@ -73,14 +73,25 @@ function App() {
 
         setDbFavorites(fetchedFavs || []);
         const favIds = new Set();
+        const registerId = (val) => {
+          if (!val) return;
+          const s = String(val).trim();
+          favIds.add(s);
+          if (s.startsWith('itunes_')) {
+            favIds.add(s.replace(/^itunes_/, ''));
+          } else if (/^\d+$/.test(s)) {
+            favIds.add(`itunes_${s}`);
+          }
+        };
+
         (fetchedFavs || []).forEach(f => {
-          if (f.rawSongId) favIds.add(String(f.rawSongId));
+          if (f.rawSongId) registerId(f.rawSongId);
           if (typeof f.songId === 'string') {
-            favIds.add(f.songId);
+            registerId(f.songId);
           } else if (f.songId && typeof f.songId === 'object') {
-            if (f.songId._id) favIds.add(String(f.songId._id));
-            if (f.songId.id) favIds.add(String(f.songId.id));
-            if (f.songId.songId) favIds.add(String(f.songId.songId));
+            if (f.songId._id) registerId(f.songId._id);
+            if (f.songId.id) registerId(f.songId.id);
+            if (f.songId.songId) registerId(f.songId.songId);
           }
         });
         setFavorites(favIds);
@@ -135,10 +146,16 @@ function App() {
     const rawId = isObject ? (songOrId._id || songOrId.id || songOrId.songId) : songOrId;
     if (!rawId) return;
 
-    const idStr = String(rawId);
-    const isFav = favorites.has(rawId) || 
-      favorites.has(idStr) || 
-      (isObject && ((songOrId._id && favorites.has(String(songOrId._id))) || (songOrId.id && favorites.has(String(songOrId.id)))));
+    const idStr = String(rawId).trim();
+    const idVariants = [idStr];
+    if (idStr.startsWith('itunes_')) {
+      idVariants.push(idStr.replace(/^itunes_/, ''));
+    } else if (/^\d+$/.test(idStr)) {
+      idVariants.push(`itunes_${idStr}`);
+    }
+
+    const isFav = idVariants.some(v => favorites.has(v)) ||
+      (isObject && [songOrId._id, songOrId.id, songOrId.songId].some(x => x && (favorites.has(x) || favorites.has(String(x)))));
     
     // Save previous state for rollback if request fails
     const previousFavs = new Set(favorites);
@@ -147,16 +164,14 @@ function App() {
     // Optimistic UI update
     const newFavs = new Set(favorites);
     if (isFav) {
-      newFavs.delete(rawId);
-      newFavs.delete(idStr);
+      idVariants.forEach(v => newFavs.delete(v));
       if (isObject) {
         if (songOrId._id) { newFavs.delete(songOrId._id); newFavs.delete(String(songOrId._id)); }
         if (songOrId.id) { newFavs.delete(songOrId.id); newFavs.delete(String(songOrId.id)); }
         if (songOrId.songId) { newFavs.delete(songOrId.songId); newFavs.delete(String(songOrId.songId)); }
       }
     } else {
-      newFavs.add(rawId);
-      newFavs.add(idStr);
+      idVariants.forEach(v => newFavs.add(v));
       if (isObject) {
         if (songOrId._id) newFavs.add(String(songOrId._id));
         if (songOrId.id) newFavs.add(String(songOrId.id));
@@ -166,32 +181,42 @@ function App() {
 
     try {
       if (isFav) {
-        // Find existing record in dbFavorites
+        // Find existing record in dbFavorites with normalized ID check
+        const matchVariant = (candidate) => {
+          if (!candidate) return false;
+          const cStr = String(candidate).trim();
+          return idVariants.includes(cStr) || idVariants.some(v => v.replace(/^itunes_/, '') === cStr.replace(/^itunes_/, ''));
+        };
+
         const favRecord = dbFavorites.find(f => {
-          if (f.rawSongId && (String(f.rawSongId) === idStr || f.rawSongId === rawId)) return true;
-          if (f._id === rawId || String(f._id) === idStr) return true;
+          if (matchVariant(f.rawSongId)) return true;
+          if (matchVariant(f._id)) return true;
           const s = f.songId;
           if (!s) return false;
-          if (typeof s === 'string') return s === idStr || s === rawId;
-          return s._id === rawId || s.id === rawId || String(s._id) === idStr || String(s.id) === idStr;
+          if (typeof s === 'string') return matchVariant(s);
+          return matchVariant(s._id) || matchVariant(s.id) || matchVariant(s.songId);
         });
 
         const targetId = favRecord?._id || idStr;
         await api.removeFavorite(targetId);
         setDbFavorites(prev => prev.filter(f => 
           f._id !== targetId && 
-          String(f.rawSongId) !== idStr && 
-          String(f.songId) !== idStr && 
-          (!f.songId || (String(f.songId._id) !== idStr && String(f.songId.id) !== idStr))
+          !matchVariant(f.rawSongId) && 
+          !matchVariant(f.songId) && 
+          (!f.songId || (!matchVariant(f.songId._id) && !matchVariant(f.songId.id)))
         ));
       } else {
         const externalData = isObject ? songOrId : null;
         const newFav = await api.addFavorite(idStr, externalData);
         if (newFav) {
+          const resolvedSong = isObject
+            ? songOrId
+            : (songs.find(s => String(s._id || s.id) === idStr) || newFav.songId || { _id: idStr, id: idStr });
+
           const normalizedFav = {
             ...newFav,
             rawSongId: idStr,
-            songId: isObject ? songOrId : (songs.find(s => String(s._id || s.id) === idStr) || newFav.songId)
+            songId: resolvedSong
           };
           setDbFavorites(prev => {
             const filtered = prev.filter(f => String(f.rawSongId) !== idStr && f._id !== newFav._id);

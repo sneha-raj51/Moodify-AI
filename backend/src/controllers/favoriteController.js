@@ -8,25 +8,55 @@ export const getFavorites = async (req, res) => {
       return res.status(401).json({ message: 'Authentication required' });
     }
 
-    const favorites = await Favorite.find({ userId: req.user.id });
+    const favorites = await Favorite.find({ userId: req.user.id }).sort({ createdAt: -1 });
     
-    // Manually populate MongoDB songs
-    const mongoIds = favorites.filter(f => !f.externalData).map(f => f.songId);
-    const mongoSongs = await Song.find({ _id: { $in: mongoIds } });
+    // Collect all candidate MongoDB song IDs
+    const mongoIds = favorites
+      .map(f => f.songId)
+      .filter(id => id && mongoose.Types.ObjectId.isValid(id));
+
+    const mongoSongs = mongoIds.length > 0 ? await Song.find({ _id: { $in: mongoIds } }) : [];
     const songMap = new Map(mongoSongs.map(s => [s._id.toString(), s]));
 
     const populatedFavorites = favorites.map(fav => {
       const favObj = fav.toObject();
-      if (fav.externalData) {
-        const ext = typeof fav.externalData === 'object' ? { ...fav.externalData } : { id: fav.songId };
-        const unifiedId = ext._id || ext.id || fav.songId;
+      const rawId = String(fav.songId);
+
+      if (fav.externalData && typeof fav.externalData === 'object') {
+        const ext = { ...fav.externalData };
+        const unifiedId = ext._id || ext.id || rawId;
         ext._id = unifiedId;
         ext.id = unifiedId;
-        return { ...favObj, songId: ext, rawSongId: fav.songId };
+
+        // If local catalogue song exists, backfill any richer catalogue fields
+        const matchedSong = songMap.get(rawId);
+        if (matchedSong) {
+          const cat = matchedSong.toObject();
+          return {
+            ...favObj,
+            songId: { ...cat, ...ext, _id: cat._id.toString(), id: cat._id.toString() },
+            rawSongId: rawId
+          };
+        }
+
+        return { ...favObj, songId: ext, rawSongId: rawId };
       } else {
-        const matchedSong = songMap.get(fav.songId);
-        const songData = matchedSong ? matchedSong.toObject() : fav.songId;
-        return { ...favObj, songId: songData, rawSongId: fav.songId };
+        const matchedSong = songMap.get(rawId);
+        if (matchedSong) {
+          return { ...favObj, songId: matchedSong.toObject(), rawSongId: rawId };
+        }
+        // Fallback placeholder for external track saved with minimal data
+        return {
+          ...favObj,
+          songId: {
+            _id: rawId,
+            id: rawId,
+            title: 'Saved Track',
+            artist: 'Unknown Artist',
+            isPlayable: true
+          },
+          rawSongId: rawId
+        };
       }
     });
 
@@ -49,34 +79,69 @@ export const addFavorite = async (req, res) => {
       return res.status(400).json({ message: 'Valid Song ID is required' });
     }
 
-    if (!externalData) {
-      // Must be a local MongoDB song
-      if (!mongoose.Types.ObjectId.isValid(songId)) {
-        return res.status(400).json({ message: 'Valid MongoDB Song ID is required for local songs' });
-      }
-      const songExists = await Song.findById(songId);
-      if (!songExists) {
+    const idStr = String(songId).trim();
+
+    // Check if song is in MongoDB catalogue
+    const isMongoId = mongoose.Types.ObjectId.isValid(idStr);
+    let localSong = null;
+    if (isMongoId) {
+      localSong = await Song.findById(idStr);
+    }
+
+    // If no externalData provided and not in catalogue, verify if it's an external ID or invalid
+    if (!externalData && !localSong) {
+      if (!isMongoId && !idStr.startsWith('itunes_') && !idStr.startsWith('jamendo_') && !/^\d+$/.test(idStr)) {
         return res.status(404).json({ message: 'Song not found' });
       }
     }
 
-    // Check if already favorited by this user (safe idempotent action)
-    const existing = await Favorite.findOne({ userId: req.user.id, songId: String(songId) });
-    if (existing) {
-      return res.status(200).json(existing);
+    // Check if already favorited by this user (check both with and without itunes_ prefix)
+    const idVariants = [idStr];
+    if (idStr.startsWith('itunes_')) {
+      idVariants.push(idStr.replace(/^itunes_/, ''));
+    } else if (/^\d+$/.test(idStr)) {
+      idVariants.push(`itunes_${idStr}`);
     }
 
+    const existing = await Favorite.findOne({
+      userId: req.user.id,
+      songId: { $in: idVariants }
+    });
+
+    if (existing) {
+      const existingObj = existing.toObject();
+      const retSong = localSong
+        ? localSong.toObject()
+        : (existing.externalData || { _id: idStr, id: idStr, isPlayable: true });
+      return res.status(200).json({
+        ...existingObj,
+        songId: retSong,
+        rawSongId: idStr
+      });
+    }
+
+    // Persist full metadata in externalData for streaming tracks or catalogue snapshot
     const payload = {
       userId: req.user.id,
-      songId: String(songId),
-      externalData: externalData || null
+      songId: idStr,
+      externalData: externalData || (localSong ? localSong.toObject() : null)
     };
 
     const favorite = await Favorite.create(payload);
-    res.status(201).json(favorite);
+    const favObj = favorite.toObject();
+    const resolvedSongData = externalData || (localSong ? localSong.toObject() : { _id: idStr, id: idStr, isPlayable: true });
+
+    res.status(201).json({
+      ...favObj,
+      songId: resolvedSongData,
+      rawSongId: idStr
+    });
   } catch (error) {
     if (error.code === 11000) {
-      const existing = await Favorite.findOne({ userId: req.user.id, songId: String(req.body.songId) });
+      const existing = await Favorite.findOne({
+        userId: req.user.id,
+        songId: String(req.body.songId)
+      });
       return res.status(200).json(existing);
     }
     if (error.name === 'ValidationError') {
@@ -98,13 +163,24 @@ export const removeFavorite = async (req, res) => {
       return res.status(400).json({ message: 'Valid favorite ID or song ID is required' });
     }
 
-    // Support deletion by Favorite _id OR by songId, strictly scoped to current user
-    const isMongoId = mongoose.Types.ObjectId.isValid(id);
+    const idStr = String(id).trim();
+    const isMongoId = mongoose.Types.ObjectId.isValid(idStr);
+
+    // Build multi-attribute identifier variants for reliable track un-favoriting
+    const idVariants = [idStr];
+    if (idStr.startsWith('itunes_')) {
+      idVariants.push(idStr.replace(/^itunes_/, ''));
+    } else if (/^\d+$/.test(idStr)) {
+      idVariants.push(`itunes_${idStr}`);
+    }
+
     const query = {
       userId: req.user.id,
       $or: [
-        ...(isMongoId ? [{ _id: id }] : []),
-        { songId: String(id) }
+        ...(isMongoId ? [{ _id: idStr }] : []),
+        { songId: { $in: idVariants } },
+        { 'externalData.id': { $in: idVariants } },
+        { 'externalData._id': { $in: idVariants } }
       ]
     };
 

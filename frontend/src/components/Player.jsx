@@ -232,6 +232,13 @@ const Player = ({
     const onTimeUpdate = () => {
       if (typeof audio.currentTime === 'number' && !isNaN(audio.currentTime)) {
         setCurrentTime(audio.currentTime);
+        if (audio.currentTime >= 15 && !meaningfulLoggedRef.current && historyRecordIdRef.current) {
+          meaningfulLoggedRef.current = true;
+          api.updateListen(historyRecordIdRef.current, {
+            isMeaningful: true,
+            listenedDuration: audio.currentTime
+          }).catch(e => console.warn('Meaningful listen update notice:', e));
+        }
       }
     };
 
@@ -249,6 +256,18 @@ const Player = ({
       if (typeof onSongFinished === 'function' && canonicalSong) {
         onSongFinished(canonicalSong);
       }
+      // Record completed status in listening history
+      completedLoggedRef.current = true;
+      meaningfulLoggedRef.current = true;
+      if (historyRecordIdRef.current) {
+        const finalDuration = (audio.duration && !isNaN(audio.duration) && audio.duration > 0) ? audio.duration : (duration || 30);
+        api.updateListen(historyRecordIdRef.current, {
+          completed: true,
+          skipped: false,
+          isMeaningful: true,
+          listenedDuration: finalDuration
+        }).catch(e => console.warn('History completion update notice:', e));
+      }
       // Record complete feedback for recommendation engine personalization
       const sId = canonicalSong?._id || canonicalSong?.id || canonicalSong?.songId;
       if (sId) {
@@ -263,7 +282,7 @@ const Player = ({
           externalId: canonicalSong?.externalId
         }).catch(() => {});
       }
-      handleNext();
+      handleNext(true);
     };
 
     const onError = async () => {
@@ -424,10 +443,10 @@ const Player = ({
   };
 
   // Next track logic
-  const handleNext = () => {
+  const handleNext = (isNaturalEnd = false) => {
     if (!activeList || activeList.length === 0 || !setCurrentSong) return;
 
-    if (historyRecordIdRef.current && !meaningfulLoggedRef.current && !completedLoggedRef.current) {
+    if (!isNaturalEnd && historyRecordIdRef.current && !completedLoggedRef.current) {
       api.updateListen(historyRecordIdRef.current, { 
         skipped: true, 
         listenedDuration: currentTime 

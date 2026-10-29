@@ -110,41 +110,43 @@ export const getSongs = async () => {
 export const getFavorites = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/favorites`, { headers: getAuthHeaders() });
-    if (!res.ok) throw new Error('Network response was not ok');
-    return await res.json();
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || 'Failed to fetch favorites');
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   } catch (error) {
-    console.warn('Backend unavailable for favorites:', error);
+    console.warn('Backend unavailable for favorites:', error.message);
     return [];
   }
 };
 
 export const addFavorite = async (songId, externalData = null) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/favorites`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ songId, externalData })
-    });
-    if (!res.ok) throw new Error('Failed to add favorite');
-    return await res.json();
-  } catch (error) {
-    console.warn('Backend unavailable, adding local favorite fallback.');
-    throw error;
+  const cleanId = String(songId).trim();
+  const res = await fetch(`${API_BASE_URL}/favorites`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ songId: cleanId, externalData })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || 'Failed to add favorite');
   }
+  return data;
 };
 
 export const removeFavorite = async (favoriteId) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/favorites/${favoriteId}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders()
-    });
-    if (!res.ok) throw new Error('Failed to remove favorite');
-    return await res.json();
-  } catch (error) {
-    console.warn('Backend unavailable, removing local favorite fallback.');
-    throw error;
+  const cleanId = String(favoriteId).trim();
+  const res = await fetch(`${API_BASE_URL}/favorites/${encodeURIComponent(cleanId)}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || 'Failed to remove favorite');
   }
+  return data;
 };
 
 export const getMoods = async () => {

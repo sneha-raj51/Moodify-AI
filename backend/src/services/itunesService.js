@@ -69,7 +69,7 @@ const fetchItunesStore = async (term, country = 'US', limit = 15) => {
   const url = `${ITUNES_API_BASE}?${queryParams.toString()}`;
 
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(4500) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (!response.ok) {
       console.warn(`iTunes API error (${country}): ${response.status}`);
       return [];
@@ -130,11 +130,16 @@ export const searchItunesTracks = async (mood, language = 'English', genres = []
 
   let allResults = [];
   
-  // Search with the best terms
-  for (const term of terms.slice(0, 2)) {
-    const results = await fetchItunesStore(term, primaryCountry, limit);
-    allResults = [...allResults, ...results];
-    if (allResults.length >= limit) break;
+  // Parallel search with the best terms to minimize latency
+  const targetTerms = terms.slice(0, 2);
+  const settled = await Promise.allSettled(
+    targetTerms.map(term => fetchItunesStore(term, primaryCountry, limit))
+  );
+
+  for (const res of settled) {
+    if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+      allResults.push(...res.value);
+    }
   }
 
   // Deduplicate by trackId / title

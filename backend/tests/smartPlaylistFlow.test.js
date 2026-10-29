@@ -117,7 +117,7 @@ describe('Smart Playlist Builder Flow & State Transition Regression Tests', () =
     for (const id of firstTrackIds) {
       expect(regenTrackIds).not.toContain(id);
     }
-  });
+  }, 10000);
 
   it('4. Simulates view state flow: builder -> results, edit filters returns to builder without resetting state', () => {
     // State machine contract test

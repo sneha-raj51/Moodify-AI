@@ -1,3 +1,5 @@
+const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-20b';
+
 const callOpenAI = async (prompt, apiKey) => {
   if (!apiKey) throw new Error('API key missing');
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -11,13 +13,10 @@ const callOpenAI = async (prompt, apiKey) => {
       messages: [{ role: 'system', content: prompt }],
       temperature: 0.7
     }),
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(3500)
   });
 
   if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      throw Object.assign(new Error(`OpenAI Error: ${response.status}`), { isRetryable: true });
-    }
     throw new Error(`OpenAI Error: ${response.status}`);
   }
   
@@ -28,20 +27,17 @@ const callOpenAI = async (prompt, apiKey) => {
 
 const callGemini = async (prompt, apiKey) => {
   if (!apiKey) throw new Error('API key missing');
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.7 }
     }),
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(3500)
   });
   
   if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      throw Object.assign(new Error(`Gemini Error: ${response.status}`), { isRetryable: true });
-    }
     throw new Error(`Gemini Error: ${response.status}`);
   }
   
@@ -52,6 +48,7 @@ const callGemini = async (prompt, apiKey) => {
 
 const callGroq = async (prompt, apiKey) => {
   if (!apiKey) throw new Error('API key missing');
+  const model = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -59,17 +56,14 @@ const callGroq = async (prompt, apiKey) => {
       'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: 'openai/gpt-oss-20b',
+      model: model,
       messages: [{ role: 'system', content: prompt }],
       temperature: 0.7
     }),
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(7000)
   });
 
   if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      throw Object.assign(new Error(`Groq Error: ${response.status}`), { isRetryable: true });
-    }
     throw new Error(`Groq Error: ${response.status}`);
   }
   
@@ -83,9 +77,21 @@ const parseJson = (text) => {
   try {
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
-    return [];
+    return parsed;
   } catch (e) {
-    throw Object.assign(new Error('AI returned invalid JSON'), { isRetryable: true });
+    const objMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      try {
+        return JSON.parse(objMatch[0]);
+      } catch (err) {}
+    }
+    const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      try {
+        return JSON.parse(arrMatch[0]);
+      } catch (err) {}
+    }
+    throw new Error('AI returned invalid JSON');
   }
 };
 
@@ -97,8 +103,8 @@ const getApiKey = (provider) => {
 };
 
 export const getAIRecommendationsMultiProvider = async (prompt) => {
-  const primary = process.env.AI_PROVIDER || 'openai';
-  const fallbacksStr = process.env.AI_FALLBACK_PROVIDERS || 'gemini,groq';
+  const primary = process.env.AI_PROVIDER || 'groq';
+  const fallbacksStr = process.env.AI_FALLBACK_PROVIDERS || 'openai,gemini';
   const fallbacks = fallbacksStr.split(',').map(s => s.trim()).filter(Boolean);
   
   const providersToTry = [primary, ...fallbacks.filter(p => p !== primary)];
@@ -119,15 +125,11 @@ export const getAIRecommendationsMultiProvider = async (prompt) => {
         return { ids, source: 'ai', provider: 'groq' };
       }
     } catch (err) {
-      console.error(`Provider ${provider} failed: ${err.message}`);
-      if (!err.isRetryable && err.name !== 'TimeoutError') {
-        // Log non-retryable error but try fallback providers anyway to ensure high availability
-        console.warn(`Non-retryable error from ${provider}, skipping to next fallback.`);
-      }
+      console.warn(`Provider ${provider} recommendation failed: ${err.message}`);
     }
   }
   
-  throw new Error('All configured AI providers failed or missing API keys.');
+  return { ids: [], source: 'fallback', provider: 'deterministic' };
 };
 
 const parseAnyJson = (text) => {
@@ -170,13 +172,10 @@ const callOpenAIJson = async (prompt, systemInstruction, apiKey) => {
       messages,
       temperature: 0.7
     }),
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(3500)
   });
 
   if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      throw Object.assign(new Error(`OpenAI Error: ${response.status}`), { isRetryable: true });
-    }
     throw new Error(`OpenAI Error: ${response.status}`);
   }
 
@@ -188,20 +187,17 @@ const callOpenAIJson = async (prompt, systemInstruction, apiKey) => {
 const callGeminiJson = async (prompt, systemInstruction, apiKey) => {
   if (!apiKey) throw new Error('API key missing');
   const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: fullPrompt }] }],
       generationConfig: { temperature: 0.7 }
     }),
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(3500)
   });
 
   if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      throw Object.assign(new Error(`Gemini Error: ${response.status}`), { isRetryable: true });
-    }
     throw new Error(`Gemini Error: ${response.status}`);
   }
 
@@ -218,6 +214,7 @@ const callGroqJson = async (prompt, systemInstruction, apiKey) => {
   }
   messages.push({ role: 'user', content: prompt });
 
+  const model = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -225,17 +222,14 @@ const callGroqJson = async (prompt, systemInstruction, apiKey) => {
       'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: 'openai/gpt-oss-20b',
+      model: model,
       messages,
       temperature: 0.7
     }),
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(7000)
   });
 
   if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      throw Object.assign(new Error(`Groq Error: ${response.status}`), { isRetryable: true });
-    }
     throw new Error(`Groq Error: ${response.status}`);
   }
 
@@ -245,8 +239,8 @@ const callGroqJson = async (prompt, systemInstruction, apiKey) => {
 };
 
 export const callAIJson = async (prompt, systemInstruction = '') => {
-  const primary = process.env.AI_PROVIDER || 'openai';
-  const fallbacksStr = process.env.AI_FALLBACK_PROVIDERS || 'gemini,groq';
+  const primary = process.env.AI_PROVIDER || 'groq';
+  const fallbacksStr = process.env.AI_FALLBACK_PROVIDERS || 'openai,gemini';
   const fallbacks = fallbacksStr.split(',').map(s => s.trim()).filter(Boolean);
 
   const providersToTry = [primary, ...fallbacks.filter(p => p !== primary)];
@@ -256,15 +250,15 @@ export const callAIJson = async (prompt, systemInstruction = '') => {
       const apiKey = getApiKey(provider);
       if (!apiKey) continue;
 
-      if (provider === 'openai') {
+      if (provider === 'groq') {
+        const result = await callGroqJson(prompt, systemInstruction, apiKey);
+        return { data: result, provider: 'groq' };
+      } else if (provider === 'openai') {
         const result = await callOpenAIJson(prompt, systemInstruction, apiKey);
         return { data: result, provider: 'openai' };
       } else if (provider === 'gemini') {
         const result = await callGeminiJson(prompt, systemInstruction, apiKey);
         return { data: result, provider: 'gemini' };
-      } else if (provider === 'groq') {
-        const result = await callGroqJson(prompt, systemInstruction, apiKey);
-        return { data: result, provider: 'groq' };
       }
     } catch (err) {
       console.warn(`Provider ${provider} failed for callAIJson: ${err.message}`);
@@ -273,4 +267,3 @@ export const callAIJson = async (prompt, systemInstruction = '') => {
 
   return null;
 };
-

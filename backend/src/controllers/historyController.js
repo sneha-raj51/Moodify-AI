@@ -146,6 +146,10 @@ export const getListeningRecap = async (req, res) => {
         startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         endDate = now;
         break;
+      case 'all':
+        startDate = new Date(0);
+        endDate = now;
+        break;
       case 'custom':
         if (!from || !to) {
           return res.status(400).json({ message: 'Both "from" and "to" date parameters are required for custom range' });

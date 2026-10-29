@@ -23,7 +23,7 @@ const History = ({
     setLoading(true);
     try {
       const data = await api.getHistory();
-      setHistoryItems(data);
+      setHistoryItems(Array.isArray(data) ? data : []);
     } catch (err) {
       console.warn('Failed to fetch history:', err);
     } finally {
@@ -162,7 +162,10 @@ const History = ({
           <div className="bg-white rounded-3xl border border-mood-black/5 shadow-sm divide-y divide-mood-black/5 overflow-hidden">
             {historyItems.map((item, idx) => {
                 const songId = item.songId || item._id;
-                const isFav = favorites.has(songId);
+                const rawStr = String(songId || '');
+                const isFav = favorites.has(songId) || favorites.has(rawStr) || 
+                  (rawStr.startsWith('itunes_') && favorites.has(rawStr.slice(7))) ||
+                  (/^\d+$/.test(rawStr) && favorites.has(`itunes_${rawStr}`));
                 const isPlayable = Boolean(item.audioUrl || item.isPlayable);
 
                 // Construct a playable song object
@@ -245,7 +248,7 @@ const History = ({
                         ) : (
                           <span>Listened</span>
                         )}
-                        {' • '}{formatRelativeTime(item.playedAt || item.timestamp)}
+                        {' • '}{formatRelativeTime(item.playedAt || item.timestamp || item.createdAt)}
                       </p>
                     </div>
 

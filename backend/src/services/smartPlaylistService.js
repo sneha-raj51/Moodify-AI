@@ -300,19 +300,26 @@ export const buildSmartPlaylist = async ({
     if (language && language !== 'Any') itunesQueryList.push(language);
 
     const queryStr = itunesQueryList.join(' ') || 'popular music';
-    const itunesResults = await searchItunesByQuery(queryStr, 25);
-    (itunesResults || []).forEach(t => {
-      addCandidate(t, 'itunes', 'iTunes 30-sec preview');
-    });
-
+    const itunesPromises = [searchItunesByQuery(queryStr, 25)];
     if (mood && mood !== 'Any') {
-      const itunesMoodResults = await searchItunesTracks(
-        mood,
-        language !== 'Any' ? language : 'English',
-        effectiveGenre !== 'Any' ? [effectiveGenre] : [],
-        20
+      itunesPromises.push(
+        searchItunesTracks(
+          mood,
+          language !== 'Any' ? language : 'English',
+          effectiveGenre !== 'Any' ? [effectiveGenre] : [],
+          20
+        )
       );
-      (itunesMoodResults || []).forEach(t => {
+    }
+
+    const itunesSettled = await Promise.allSettled(itunesPromises);
+    if (itunesSettled[0]?.status === 'fulfilled' && Array.isArray(itunesSettled[0].value)) {
+      itunesSettled[0].value.forEach(t => {
+        addCandidate(t, 'itunes', 'iTunes 30-sec preview');
+      });
+    }
+    if (itunesSettled[1]?.status === 'fulfilled' && Array.isArray(itunesSettled[1].value)) {
+      itunesSettled[1].value.forEach(t => {
         addCandidate(t, 'itunes', `iTunes 30-sec preview (${mood} vibe)`);
       });
     }
