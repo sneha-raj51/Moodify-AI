@@ -24,9 +24,12 @@ const app = express();
 const getCorsOrigin = () => {
   const configured = process.env.CORS_ORIGIN;
   if (!configured) {
-    return process.env.NODE_ENV === 'production' ? false : '*';
+    return process.env.NODE_ENV === 'production' ? false : true;
   }
-  if (configured === '*') return '*';
+  if (configured === '*') {
+    // Reflect origin to comply with credentials: true
+    return true;
+  }
   const origins = configured.split(',').map(o => o.trim()).filter(Boolean);
   return origins.length === 1 ? origins[0] : origins;
 };

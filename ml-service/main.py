@@ -107,10 +107,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Moodify AI ML & Recommendation Service", version="1.1.0", lifespan=lifespan)
 
+cors_origins_env = os.getenv("CORS_ORIGINS", "*")
+configured_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+is_wildcard = "*" in configured_origins or cors_origins_env.strip() == "*"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"] if is_wildcard else configured_origins,
+    allow_credentials=not is_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )

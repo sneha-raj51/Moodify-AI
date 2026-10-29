@@ -20,7 +20,7 @@ let server;
 const startServer = async () => {
   try {
     await connectDB();
-    server = app.listen(PORT, () => {
+    server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server is running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
     });
   } catch (error) {
