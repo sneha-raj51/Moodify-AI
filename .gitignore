@@ -66,3 +66,6 @@ Thumbs.db
 *.sln
 *.sw?
 scratch/
+
+# Internal development reports and audits (preserved locally, untracked)
+MOODIFY_AI_*.md
