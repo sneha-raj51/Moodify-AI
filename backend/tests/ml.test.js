@@ -110,5 +110,18 @@ describe('ML Controller Integration', () => {
     expect(res.body.class_probabilities).toHaveProperty('happy', 0.78);
     expect(res.body.model_version).toBe('resnet18-fer2013-v1.1');
   });
+
+  it('should return 504 when ML service request times out', async () => {
+    const abortErr = new Error('The operation was aborted');
+    abortErr.name = 'AbortError';
+    vi.spyOn(global, 'fetch').mockRejectedValue(abortErr);
+
+    const res = await request(app)
+      .post('/api/ml/predict')
+      .attach('file', Buffer.from('mock face image data'), 'face.jpg');
+
+    expect(res.status).toBe(504);
+    expect(res.body.message).toBe('ML Service timed out');
+  });
 });
 

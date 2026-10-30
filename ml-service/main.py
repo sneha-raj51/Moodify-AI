@@ -24,15 +24,88 @@ from recommender import (
 )
 
 # Configuration
-MODEL_PATH = os.getenv("MODEL_PATH", "models/fer2013_resnet18.pth")
+EMOTIONS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.50"))
+MODEL_VERSION = os.getenv("MODEL_VERSION", "resnet18-fer2013-v1.1")
 HAAR_CASCADE_PATH = (
     os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
     if getattr(cv2, 'data', None) and hasattr(cv2.data, 'haarcascades')
     else None
 )
-EMOTIONS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.50"))
-MODEL_VERSION = os.getenv("MODEL_VERSION", "resnet18-fer2013-v1.1")
+
+def resolve_model_path() -> str:
+    """
+    Robustly resolves the FER-2013 ResNet-18 model checkpoint path
+    across different working directories in development and production containers.
+    """
+    env_path = os.getenv("MODEL_PATH")
+    if env_path and os.path.exists(env_path):
+        return os.path.abspath(env_path)
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        env_path,
+        os.path.join(base_dir, "models", "fer2013_resnet18.pth"),
+        os.path.join(base_dir, "models", "resnet18_transfer_v1.pth"),
+        os.path.join(base_dir, "..", "models", "fer2013_resnet18.pth"),
+        os.path.join(os.getcwd(), "models", "fer2013_resnet18.pth"),
+        os.path.join(os.getcwd(), "ml-service", "models", "fer2013_resnet18.pth"),
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return os.path.abspath(c)
+
+    target = env_path if env_path else os.path.join(base_dir, "models", "fer2013_resnet18.pth")
+    return os.path.abspath(target)
+
+
+def download_model_if_needed(target_path: str) -> bool:
+    """
+    If the model weights file does not exist on disk, check for MODEL_URL
+    environment variable and download the trained weights if provided.
+    """
+    if os.path.exists(target_path) and os.path.getsize(target_path) > 1024 * 1024:
+        return True
+
+    model_url = os.getenv("MODEL_URL", "").strip()
+    if not model_url:
+        return False
+
+    print(f"Model file not found at {target_path}. Attempting download from MODEL_URL: {model_url}")
+    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+    tmp_path = target_path + ".tmp"
+    try:
+        import httpx
+        with httpx.Client(timeout=180.0, follow_redirects=True) as client:
+            with client.stream("GET", model_url) as response:
+                response.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=65536):
+                        f.write(chunk)
+
+        downloaded_size = os.path.getsize(tmp_path)
+        if downloaded_size > 10 * 1024 * 1024:
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            os.replace(tmp_path, target_path)
+            print(f"Model downloaded successfully to {target_path} ({downloaded_size} bytes).")
+            return True
+        else:
+            print(f"Downloaded model file too small ({downloaded_size} bytes). Discarding.")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return False
+    except Exception as e:
+        print(f"Failed to download model from {model_url}: {e}")
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return False
+
+
+MODEL_PATH = resolve_model_path()
 
 # Model Architecture (must match the saved weights)
 class FaceEmotionModel(nn.Module):
@@ -71,9 +144,19 @@ async def lifespan(app: FastAPI):
         print("Haar CascadeClassifier or cascade file not available in this OpenCV build.")
         face_cascade = None
 
-    print(f"Attempting to load PyTorch model from {MODEL_PATH}...")
-    if os.path.exists(MODEL_PATH):
-        metadata_path = MODEL_PATH.replace(".pth", "_metadata.json")
+    resolved_path = resolve_model_path()
+    if not os.path.exists(resolved_path):
+        download_model_if_needed(resolved_path)
+
+    print(f"Attempting to load PyTorch model from {resolved_path}...")
+    if os.path.exists(resolved_path):
+        metadata_path = resolved_path.replace(".pth", "_metadata.json")
+        if not os.path.exists(metadata_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            alt_meta = os.path.join(base_dir, "models", "fer2013_metadata.json")
+            if os.path.exists(alt_meta):
+                metadata_path = alt_meta
+
         if os.path.exists(metadata_path):
             try:
                 with open(metadata_path, "r") as f:
@@ -87,7 +170,7 @@ async def lifespan(app: FastAPI):
 
         try:
             model = FaceEmotionModel(num_classes=len(EMOTIONS))
-            ckpt = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+            ckpt = torch.load(resolved_path, map_location=device, weights_only=True)
             if any(k.startswith("resnet.") for k in ckpt.keys()):
                 model.load_state_dict(ckpt, strict=True)
             else:
@@ -100,7 +183,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"Error loading model weights: {e}")
     else:
-        print(f"Emotion model file {MODEL_PATH} not found. Service will report model_ready=False.")
+        print(f"Emotion model file {resolved_path} not found. Service will report model_ready=False.")
 
     yield
 
@@ -111,13 +194,23 @@ cors_origins_env = os.getenv("CORS_ORIGINS", "*")
 configured_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
 is_wildcard = "*" in configured_origins or cors_origins_env.strip() == "*"
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"] if is_wildcard else configured_origins,
-    allow_credentials=not is_wildcard,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if is_wildcard:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https://.*\.vercel\.app$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=configured_origins,
+        allow_origin_regex=r"^https://.*\.vercel\.app$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 class HealthResponse(BaseModel):

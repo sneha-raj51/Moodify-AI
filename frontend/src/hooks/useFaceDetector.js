@@ -306,7 +306,7 @@ export const useFaceDetector = () => {
                     if (err.status === 503 || err.message?.includes('not ready')) {
                       setMlServiceError("Emotion model is not ready. Please select your mood manually.");
                     } else if (consecutiveErrorsRef.current >= 4) {
-                      setMlServiceError(`Emotion detection service unavailable (${err.message || 'error'}). Please select your mood manually.`);
+                      setMlServiceError(`Service unreachable (${err.message || 'connection error'}). Please select your mood manually.`);
                     }
                   })
                   .finally(() => {

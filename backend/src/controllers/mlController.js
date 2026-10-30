@@ -5,17 +5,28 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Resolves the Python ML Service base URL with trailing slashes stripped.
+ */
+export const getMlServiceUrl = () => {
+  const envUrl = process.env.ML_SERVICE_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    return envUrl.trim().replace(/\/+$/, '');
+  }
+  return 'http://127.0.0.1:8000';
+};
+
 export const predictEmotion = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No image file provided' });
     }
 
-    const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').trim().replace(/\/+$/, '');
+    const mlServiceUrl = getMlServiceUrl();
     
     const formData = new FormData();
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype });
-    formData.append('file', blob, req.file.originalname);
+    formData.append('file', blob, req.file.originalname || 'face.jpg');
 
     const isCropped = req.body?.is_cropped === 'true' || req.body?.is_cropped === true || req.query?.is_cropped === 'true';
     if (isCropped) {
@@ -23,21 +34,33 @@ export const predictEmotion = async (req, res) => {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout for ML inference & cold starts
 
-    const mlRes = await fetch(`${ML_SERVICE_URL}/predict`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
+    let mlRes;
+    try {
+      mlRes = await fetch(`${mlServiceUrl}/predict`, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
-    const data = await mlRes.json();
+    let data = {};
+    try {
+      data = await mlRes.json();
+    } catch (_) {
+      data = {};
+    }
     
     if (!mlRes.ok) {
       if (mlRes.status === 503) {
-         return res.status(503).json({ message: 'ML Model not ready. Please select your mood manually.' });
+        const detailMsg = data.detail || '';
+        return res.status(503).json({
+          message: detailMsg ? `ML Model not ready: ${detailMsg}` : 'ML Model not ready. Please select your mood manually.',
+          detail: detailMsg
+        });
       }
       return res.status(mlRes.status).json({ message: data.detail || 'ML Service error' });
     }
@@ -47,7 +70,16 @@ export const predictEmotion = async (req, res) => {
     if (error.name === 'AbortError') {
       return res.status(504).json({ message: 'ML Service timed out' });
     }
-    res.status(502).json({ message: 'Failed to connect to ML Service' });
+    console.error('predictEmotion error:', error.message);
+    const mlUrl = getMlServiceUrl();
+    const isLocal = mlUrl.includes('localhost') || mlUrl.includes('127.0.0.1');
+    const diagnostic = (process.env.NODE_ENV === 'production' && isLocal)
+      ? ' (ML_SERVICE_URL is set to localhost in production; please set ML_SERVICE_URL in your Render dashboard to your deployed Python ML service URL)'
+      : '';
+    res.status(502).json({ 
+      message: 'Failed to connect to ML Service',
+      detail: `Could not reach ML service at ${mlUrl}.${diagnostic}`
+    });
   }
 };
 

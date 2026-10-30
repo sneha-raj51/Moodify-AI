@@ -4,8 +4,7 @@ import User from '../models/User.js';
 import { searchJamendoTracks } from '../services/jamendoService.js';
 import { searchItunesTracks } from '../services/itunesService.js';
 import { searchAudiusTracks } from '../services/audiusService.js';
-
-const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').trim().replace(/\/+$/, '');
+import { getMlServiceUrl } from './mlController.js';
 
 /**
  * Normalizes any song (MongoDB, Jamendo, iTunes, Audius) into the documented candidate schema
@@ -219,40 +218,44 @@ export const getRecommendations = async (req, res) => {
     let providerUsed = 'python-ml';
 
     try {
+      const mlServiceUrl = getMlServiceUrl();
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for ML cold starts
 
-      const pyResponse = await fetch(`${ML_SERVICE_URL}/recommend`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          catalog: normalizedCatalog,
-          preferences: {
-            current_mood: mood,
-            desired_mood: desiredMood || null,
-            preferred_languages: effectiveLanguage ? [effectiveLanguage] : [],
-            favorite_genres: effectiveFavoriteGenres,
-            favorite_song_ids: favoriteSongIds.map(String),
-            favorite_artists: effectiveFavoriteArtists,
-            energy_level: effectiveEnergyLevel,
-            listening_mode: effectiveListeningMode,
-            feedback_likes: userFeedbackLikes,
-            feedback_dislikes: userFeedbackDislikes,
-            recent_history: recentHistory.map(h => ({
-              id: h.id ? String(h.id) : (h.songId ? String(h.songId) : null),
-              title: h.title,
-              artist: h.artist,
-              skipped: Boolean(h.skipped),
-              completed: Boolean(h.completed),
-              listened_duration: Number(h.listenedDuration || 0)
-            }))
-          },
-          limit: 20
-        }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+      let pyResponse;
+      try {
+        pyResponse = await fetch(`${mlServiceUrl}/recommend`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            catalog: normalizedCatalog,
+            preferences: {
+              current_mood: mood,
+              desired_mood: desiredMood || null,
+              preferred_languages: effectiveLanguage ? [effectiveLanguage] : [],
+              favorite_genres: effectiveFavoriteGenres,
+              favorite_song_ids: favoriteSongIds.map(String),
+              favorite_artists: effectiveFavoriteArtists,
+              energy_level: effectiveEnergyLevel,
+              listening_mode: effectiveListeningMode,
+              feedback_likes: userFeedbackLikes,
+              feedback_dislikes: userFeedbackDislikes,
+              recent_history: recentHistory.map(h => ({
+                id: h.id ? String(h.id) : (h.songId ? String(h.songId) : null),
+                title: h.title,
+                artist: h.artist,
+                skipped: Boolean(h.skipped),
+                completed: Boolean(h.completed),
+                listened_duration: Number(h.listenedDuration || 0)
+              }))
+            },
+            limit: 20
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!pyResponse.ok) {
         throw new Error(`Python service responded with status ${pyResponse.status}: ${pyResponse.statusText}`);
@@ -646,35 +649,39 @@ export const getMoodTransitionRecommendations = async (req, res) => {
     }
 
     try {
+      const mlServiceUrl = getMlServiceUrl();
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for ML cold starts
 
-      const pyResponse = await fetch(`${ML_SERVICE_URL}/recommend/transition`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          catalog: normalizedCatalog,
-          start_mood: startMood,
-          desired_mood: desiredMood,
-          steps_count: stageTemplates.length,
-          preferences: {
-            current_mood: startMood,
+      let pyResponse;
+      try {
+        pyResponse = await fetch(`${mlServiceUrl}/recommend/transition`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            catalog: normalizedCatalog,
+            start_mood: startMood,
             desired_mood: desiredMood,
-            preferred_languages: language ? [language] : [],
-            favorite_genres: favoriteGenres,
-            favorite_song_ids: favoriteSongIds.map(String),
-            favorite_artists: [],
-            feedback_likes: feedbackLikes,
-            feedback_dislikes: feedbackDislikes,
-            listening_mode: listeningMode || null,
-            recent_history: recentHistory
-          },
-          limit_per_step: 3
-        }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
+            steps_count: stageTemplates.length,
+            preferences: {
+              current_mood: startMood,
+              desired_mood: desiredMood,
+              preferred_languages: language ? [language] : [],
+              favorite_genres: favoriteGenres,
+              favorite_song_ids: favoriteSongIds.map(String),
+              favorite_artists: [],
+              feedback_likes: feedbackLikes,
+              feedback_dislikes: feedbackDislikes,
+              listening_mode: listeningMode || null,
+              recent_history: recentHistory
+            },
+            limit_per_step: 3
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!pyResponse.ok) {
         throw new Error(`Python service responded with ${pyResponse.status}`);
