@@ -1,18 +1,33 @@
-from fastapi import FastAPI, UploadFile, File, Form, Query, HTTPException
+import os
+# Strict single-thread limits to run within Render Free Tier's 512 MB RAM ceiling
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+import io
+import json
+import gc
 from typing import List, Optional
 from contextlib import asynccontextmanager
-from starlette.concurrency import run_in_threadpool
+
+from fastapi import FastAPI, UploadFile, File, Form, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
+
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
-import os
-import io
-import json
+
+# Enforce single-threaded execution and disable gradient tracking across process
+cv2.setNumThreads(1)
+torch.set_num_threads(1)
+torch.set_grad_enabled(False)
 
 from recommender import (
     RecommendRequest,
@@ -109,40 +124,56 @@ MODEL_PATH = resolve_model_path()
 
 # Model Architecture (must match the saved weights)
 class FaceEmotionModel(nn.Module):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes: int = len(EMOTIONS)):
         super(FaceEmotionModel, self).__init__()
-        self.resnet = models.resnet18(weights=None)
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
+        self.resnet = models.resnet18(weights=None, num_classes=num_classes)
 
     def forward(self, x):
         return self.resnet(x)
 
-# Global states
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Global states - Strictly CPU only to prevent any CUDA runtime initialization overhead
+device = torch.device("cpu")
 model = None
 face_cascade = None
 model_ready = False
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global model, face_cascade, model_ready
+def get_face_cascade():
+    """Lazily loads Haar Cascade only when non-cropped full frames are submitted."""
+    global face_cascade
+    if face_cascade is not None:
+        return face_cascade
     if hasattr(cv2, 'CascadeClassifier') and HAAR_CASCADE_PATH and os.path.exists(HAAR_CASCADE_PATH):
         try:
-            print("Loading Haar Cascade for face detection...")
             cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
             if not cascade.empty():
                 face_cascade = cascade
-                print("Haar Cascade loaded successfully.")
-            else:
-                print(f"Haar cascade failed to load from {HAAR_CASCADE_PATH} (cascade is empty).")
-                face_cascade = None
+                return face_cascade
         except Exception as e:
             print(f"Haar cascade load failed: {e}")
-            face_cascade = None
-    else:
-        print("Haar CascadeClassifier or cascade file not available in this OpenCV build.")
-        face_cascade = None
+    return None
+
+
+def get_process_memory_mb() -> float:
+    """Returns current process Resident Set Size (RSS) in MB for Render 512MB limit monitoring."""
+    try:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(float(line.split()[1]) / 1024.0, 2)
+    except Exception:
+        pass
+    try:
+        import resource
+        return round(float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) / 1024.0, 2)
+    except Exception:
+        pass
+    return 0.0
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global model, model_ready
 
     resolved_path = resolve_model_path()
     if not os.path.exists(resolved_path):
@@ -170,16 +201,25 @@ async def lifespan(app: FastAPI):
 
         try:
             model = FaceEmotionModel(num_classes=len(EMOTIONS))
-            ckpt = torch.load(resolved_path, map_location=device, weights_only=True)
+            # Memory-map the weights directly from disk to prevent duplicate heap allocations
+            ckpt = torch.load(resolved_path, map_location="cpu", weights_only=True, mmap=True)
             if any(k.startswith("resnet.") for k in ckpt.keys()):
                 model.load_state_dict(ckpt, strict=True)
             else:
                 remapped = {f"resnet.{k}": v for k, v in ckpt.items()}
                 model.load_state_dict(remapped, strict=True)
+                del remapped
+
+            del ckpt
+            gc.collect()
+
             model.to(device)
             model.eval()
             model_ready = True
-            print("Emotion classification model loaded successfully.")
+            print("Emotion classification model loaded successfully (single instance).")
+            mem_mb = get_process_memory_mb()
+            if mem_mb > 0:
+                print(f"[Memory] Process RSS after model load: {mem_mb:.2f} MB (within 512 MB limit)")
         except Exception as e:
             print(f"Error loading model weights: {e}")
     else:
@@ -219,16 +259,19 @@ class HealthResponse(BaseModel):
     recommender_ready: bool
     device: str
     emotion_model_missing: bool
+    memory_mb: Optional[float] = None
 
 
 @app.get("/health", response_model=HealthResponse)
 def health_check():
+    mem = get_process_memory_mb()
     return {
         "status": "ok",
         "model_ready": model_ready,
         "recommender_ready": True,
         "device": str(device),
         "emotion_model_missing": not model_ready,
+        "memory_mb": mem if mem > 0 else None,
     }
 
 
@@ -244,18 +287,21 @@ class PredictResponse(BaseModel):
     model_version: Optional[str] = None
 
 
+# Single reusable transform pipeline - instantiated once at module import to avoid per-request allocations
+TRANSFORM = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
 def preprocess_face(face_img):
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    return transform(face_img).unsqueeze(0).to(device)
+    return TRANSFORM(face_img).unsqueeze(0)
 
 
 def process_and_predict(contents: bytes, cropped: bool):
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    del contents, nparr
     if img is None:
         raise HTTPException(status_code=400, detail="Invalid image format")
 
@@ -269,15 +315,17 @@ def process_and_predict(contents: bytes, cropped: bool):
             )
         face_roi = img
     else:
-        # Full-frame input: perform face detection with Haar Cascade
-        if face_cascade is None or (hasattr(face_cascade, 'empty') and face_cascade.empty()):
+        # Full-frame input: perform face detection with lazily loaded Haar Cascade
+        cascade = get_face_cascade()
+        if cascade is None or (hasattr(cascade, 'empty') and cascade.empty()):
             raise HTTPException(
                 status_code=503,
                 detail="face_detector_unavailable: Face detector is unavailable. Please select your mood manually.",
             )
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        del gray
 
         if len(faces) == 0:
             raise HTTPException(status_code=400, detail="no_face_detected")
@@ -300,10 +348,15 @@ def process_and_predict(contents: bytes, cropped: bool):
     face_rgb = cv2.cvtColor(gray_roi, cv2.COLOR_GRAY2RGB)
     pil_img = Image.fromarray(face_rgb)
     input_tensor = preprocess_face(pil_img)
+    del pil_img, face_rgb, gray_roi, img
 
-    with torch.no_grad():
+    # Use torch.inference_mode() - avoids view tracking, version counters, and autograd overhead
+    with torch.inference_mode():
         outputs = model(input_tensor)
-        probs = torch.nn.functional.softmax(outputs, dim=1).squeeze().cpu().numpy()
+        probs = torch.nn.functional.softmax(outputs, dim=1).squeeze().numpy()
+
+    # Immediately free temporary inference tensors
+    del input_tensor, outputs
 
     # Validate that probabilities are finite and correctly normalized
     probs = np.nan_to_num(probs, nan=0.0, posinf=1.0, neginf=0.0)
@@ -358,7 +411,7 @@ async def predict_emotion(
 
 
 @app.post("/recommend", response_model=List[RecommendationResult])
-async def recommend_songs(request: RecommendRequest):
+def recommend_songs(request: RecommendRequest):
     try:
         return get_recommendations(request)
     except Exception as e:
@@ -366,7 +419,7 @@ async def recommend_songs(request: RecommendRequest):
 
 
 @app.post("/recommend/transition", response_model=List[TransitionStep])
-async def recommend_transition(request: TransitionRecommendRequest):
+def recommend_transition(request: TransitionRecommendRequest):
     try:
         return generate_mood_transition(request)
     except Exception as e:
