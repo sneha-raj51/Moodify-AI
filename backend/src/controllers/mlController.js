@@ -33,8 +33,9 @@ export const predictEmotion = async (req, res) => {
       formData.append('is_cropped', 'true');
     }
 
+    const timeoutMs = Number(process.env.ML_TIMEOUT_MS) || 65000; // 65s timeout to tolerate Render Free Tier cold starts
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout for ML inference & cold starts
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let mlRes;
     try {

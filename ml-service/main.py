@@ -1,16 +1,37 @@
 import os
-# Strict single-thread limits to run within Render Free Tier's 512 MB RAM ceiling
+# Strict single-thread limits and single memory arena to run within Render Free Tier's 512 MB RAM ceiling
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["MALLOC_ARENA_MAX"] = "1"
 
 import io
 import json
 import gc
+import ctypes
 from typing import List, Optional
 from contextlib import asynccontextmanager
+
+# Configure glibc heap trimmer to immediately return freed pages to OS kernel on Linux
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+    _malloc_trim = _libc.malloc_trim
+    _malloc_trim.argtypes = [ctypes.c_int]
+    _malloc_trim.restype = ctypes.c_int
+except Exception:
+    _malloc_trim = None
+
+
+def release_system_memory():
+    """Forces Python garbage collection and trims glibc heap arenas to prevent RSS bloat."""
+    gc.collect()
+    if _malloc_trim is not None:
+        try:
+            _malloc_trim(0)
+        except Exception:
+            pass
 
 from fastapi import FastAPI, UploadFile, File, Form, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -138,22 +159,6 @@ face_cascade = None
 model_ready = False
 
 
-def get_face_cascade():
-    """Lazily loads Haar Cascade only when non-cropped full frames are submitted."""
-    global face_cascade
-    if face_cascade is not None:
-        return face_cascade
-    if hasattr(cv2, 'CascadeClassifier') and HAAR_CASCADE_PATH and os.path.exists(HAAR_CASCADE_PATH):
-        try:
-            cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
-            if not cascade.empty():
-                face_cascade = cascade
-                return face_cascade
-        except Exception as e:
-            print(f"Haar cascade load failed: {e}")
-    return None
-
-
 def get_process_memory_mb() -> float:
     """Returns current process Resident Set Size (RSS) in MB for Render 512MB limit monitoring."""
     try:
@@ -173,7 +178,20 @@ def get_process_memory_mb() -> float:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model, model_ready
+    global model, face_cascade, model_ready
+
+    if hasattr(cv2, 'CascadeClassifier') and HAAR_CASCADE_PATH and os.path.exists(HAAR_CASCADE_PATH):
+        try:
+            cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
+            if not cascade.empty():
+                face_cascade = cascade
+            else:
+                face_cascade = None
+        except Exception as e:
+            print(f"Haar cascade load failed: {e}")
+            face_cascade = None
+    else:
+        face_cascade = None
 
     resolved_path = resolve_model_path()
     if not os.path.exists(resolved_path):
@@ -211,7 +229,7 @@ async def lifespan(app: FastAPI):
                 del remapped
 
             del ckpt
-            gc.collect()
+            release_system_memory()
 
             model.to(device)
             model.eval()
@@ -264,6 +282,7 @@ class HealthResponse(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 def health_check():
+    release_system_memory()
     mem = get_process_memory_mb()
     return {
         "status": "ok",
@@ -315,16 +334,15 @@ def process_and_predict(contents: bytes, cropped: bool):
             )
         face_roi = img
     else:
-        # Full-frame input: perform face detection with lazily loaded Haar Cascade
-        cascade = get_face_cascade()
-        if cascade is None or (hasattr(cascade, 'empty') and cascade.empty()):
+        # Full-frame input: perform face detection with Haar Cascade
+        if face_cascade is None or (hasattr(face_cascade, 'empty') and face_cascade.empty()):
             raise HTTPException(
                 status_code=503,
                 detail="face_detector_unavailable: Face detector is unavailable. Please select your mood manually.",
             )
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         del gray
 
         if len(faces) == 0:
@@ -355,8 +373,9 @@ def process_and_predict(contents: bytes, cropped: bool):
         outputs = model(input_tensor)
         probs = torch.nn.functional.softmax(outputs, dim=1).squeeze().numpy()
 
-    # Immediately free temporary inference tensors
+    # Immediately free temporary inference tensors and return memory to OS
     del input_tensor, outputs
+    release_system_memory()
 
     # Validate that probabilities are finite and correctly normalized
     probs = np.nan_to_num(probs, nan=0.0, posinf=1.0, neginf=0.0)

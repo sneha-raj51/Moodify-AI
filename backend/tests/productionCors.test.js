@@ -3,9 +3,11 @@ import { isOriginAllowed } from '../src/app.js';
 
 describe('Production CORS Policy Verification', () => {
   const originalEnv = process.env.CORS_ORIGIN;
+  const originalEnvPlural = process.env.CORS_ORIGINS;
 
   beforeEach(() => {
     delete process.env.CORS_ORIGIN;
+    delete process.env.CORS_ORIGINS;
   });
 
   afterEach(() => {
@@ -13,6 +15,11 @@ describe('Production CORS Policy Verification', () => {
       process.env.CORS_ORIGIN = originalEnv;
     } else {
       delete process.env.CORS_ORIGIN;
+    }
+    if (originalEnvPlural !== undefined) {
+      process.env.CORS_ORIGINS = originalEnvPlural;
+    } else {
+      delete process.env.CORS_ORIGINS;
     }
   });
 
@@ -41,11 +48,19 @@ describe('Production CORS Policy Verification', () => {
     expect(isOriginAllowed('http://127.0.0.1:5173')).toBe(true);
   });
 
-  it('allows explicitly configured origins from CORS_ORIGIN environment variable', () => {
+  it('allows explicitly configured origins from CORS_ORIGIN or CORS_ORIGINS environment variable', () => {
     process.env.CORS_ORIGIN = 'https://customdomain.com, https://app.moodify.com/';
     expect(isOriginAllowed('https://customdomain.com')).toBe(true);
     expect(isOriginAllowed('https://app.moodify.com')).toBe(true);
     expect(isOriginAllowed('https://unconfigured.com')).toBe(false);
+
+    delete process.env.CORS_ORIGIN;
+    process.env.CORS_ORIGINS = 'https://custom-plural.com';
+    expect(isOriginAllowed('https://custom-plural.com')).toBe(true);
+  });
+
+  it('explicitly allows the canonical moodify-ai-nine.vercel.app deployment', () => {
+    expect(isOriginAllowed('https://moodify-ai-nine.vercel.app')).toBe(true);
   });
 
   it('allows all origins when CORS_ORIGIN is wildcard *', () => {

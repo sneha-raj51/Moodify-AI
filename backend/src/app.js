@@ -25,12 +25,24 @@ export const isOriginAllowed = (origin) => {
   // Allow non-browser requests (e.g. curl, health checks, server-to-server)
   if (!origin) return true;
 
-  const configured = process.env.CORS_ORIGIN;
+  // Support both singular and plural environment variable naming for Render compatibility
+  const configured = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS;
   if (configured === '*') return true;
 
   const allowedList = configured
     ? configured.split(',').map(o => o.trim().replace(/\/+$/, '')).filter(Boolean)
     : [];
+
+  // Always ensure the canonical production Vercel frontend URL is explicitly permitted
+  const defaultAllowed = [
+    'https://moodify-ai-nine.vercel.app',
+    'https://moodify-ai.vercel.app'
+  ];
+  for (const def of defaultAllowed) {
+    if (!allowedList.includes(def)) {
+      allowedList.push(def);
+    }
+  }
 
   const normalizedOrigin = origin.trim().replace(/\/+$/, '');
 
