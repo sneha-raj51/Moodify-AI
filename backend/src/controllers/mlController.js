@@ -11,7 +11,7 @@ export const predictEmotion = async (req, res) => {
       return res.status(400).json({ message: 'No image file provided' });
     }
 
-    const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
+    const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').trim().replace(/\/+$/, '');
     
     const formData = new FormData();
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype });

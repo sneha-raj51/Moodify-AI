@@ -21,21 +21,50 @@ import { optionalAuth } from './middleware/authMiddleware.js';
 
 const app = express();
 
-const getCorsOrigin = () => {
+export const isOriginAllowed = (origin) => {
+  // Allow non-browser requests (e.g. curl, health checks, server-to-server)
+  if (!origin) return true;
+
   const configured = process.env.CORS_ORIGIN;
-  if (!configured) {
-    return process.env.NODE_ENV === 'production' ? false : true;
-  }
-  if (configured === '*') {
-    // Reflect origin to comply with credentials: true
+  if (configured === '*') return true;
+
+  const allowedList = configured
+    ? configured.split(',').map(o => o.trim().replace(/\/+$/, '')).filter(Boolean)
+    : [];
+
+  const normalizedOrigin = origin.trim().replace(/\/+$/, '');
+
+  // Match explicitly configured origins
+  if (allowedList.includes(normalizedOrigin)) {
     return true;
   }
-  const origins = configured.split(',').map(o => o.trim()).filter(Boolean);
-  return origins.length === 1 ? origins[0] : origins;
+
+  // Allow any Vercel deployment (production, preview, and branch deploys)
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol === 'https:' && (parsed.hostname === 'vercel.app' || parsed.hostname.endsWith('.vercel.app'))) {
+      return true;
+    }
+  } catch (e) {
+    // Malformed origin
+  }
+
+  // Allow local development origins
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return true;
+  }
+
+  return false;
 };
 
 app.use(cors({
-  origin: getCorsOrigin(),
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  },
   credentials: true
 }));
 app.use(express.json());

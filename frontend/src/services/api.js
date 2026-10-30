@@ -1,6 +1,15 @@
 import { songs as mockSongs } from '../utils/mockData.js';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://localhost:5000/api' : '/api');
+const getApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    const trimmed = envUrl.trim().replace(/\/+$/, '');
+    return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+  }
+  return import.meta.env.DEV ? 'http://localhost:5000/api' : '/api';
+};
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export const getGuestSessionId = () => {
   try {

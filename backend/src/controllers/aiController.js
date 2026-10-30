@@ -5,7 +5,7 @@ import { searchJamendoTracks } from '../services/jamendoService.js';
 import { searchItunesTracks } from '../services/itunesService.js';
 import { searchAudiusTracks } from '../services/audiusService.js';
 
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
+const ML_SERVICE_URL = (process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').trim().replace(/\/+$/, '');
 
 /**
  * Normalizes any song (MongoDB, Jamendo, iTunes, Audius) into the documented candidate schema
